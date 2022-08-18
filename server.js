@@ -9,15 +9,57 @@ const passport = require('passport')
 const flash = require('express-flash')
 const session = require('express-session')
 const methodOverride = require('method-override')
+const mysql = require("mysql")
+
+const DB_HOST = "localhost"
+const DB_USER = "development"
+const DB_PASSWORD = "Password@123"
+const DB_DATABASE = "passport"
+const DB_PORT = 3306
+
+const db = mysql.createPool({
+  connectionLimit: 100,
+  host: DB_HOST,
+  user: DB_USER,
+  password: DB_PASSWORD,
+  database: DB_DATABASE,
+  port: DB_PORT
+})
 
 const initializePassport = require('./passport-config')
 initializePassport(
   passport,
-  email => users.find(user => user.email === email),
-  id => users.find(user => user.id === id)
+  email => {
+    return new Promise((resolve, reject) => {
+      db.getConnection((err, connection) => {
+        if (err) return reject(err)
+        const q = "SELECT * FROM users WHERE email = ?"
+        const query = mysql.format(q, [email])
+        return connection.query(query, (err, results) => {
+          connection.release()
+          if (err) return reject(err)
+          console.log(results[0])
+          return resolve(results[0])
+        })
+      })
+    })
+  },
+  id => {
+    return new Promise((resolve, reject) => {
+      db.getConnection((err, connection) => {
+        if (err) return reject(err)
+        const q = "SELECT * FROM users WHERE id = ?"
+        const query = mysql.format(q, [id])
+        return connection.query(query, (err, results) => {
+          connection.release()
+          if (err) return reject(err)
+          console.log(results[0])
+          return resolve(results[0])
+        })
+      })
+    })
+  }
 )
-
-const users = []
 
 app.set('view-engine', 'ejs')
 app.use(express.urlencoded({ extended: false }))
@@ -51,15 +93,39 @@ app.get('/register', checkNotAuthenticated, (req, res) => {
 
 app.post('/register', checkNotAuthenticated, async (req, res) => {
   try {
+    const id = Date.now().toString()
+    const email = req.body.email
     const hashedPassword = await bcrypt.hash(req.body.password, 10)
-    users.push({
-      id: Date.now().toString(),
-      name: req.body.name,
-      email: req.body.email,
-      password: hashedPassword
+    const name = req.body.name
+
+    db.getConnection((err, connection) => {
+      if (err) throw (err)
+
+      // Find if user with provided email already exists
+      const e = "SELECT * FROM users WHERE email = ?"
+      const search = mysql.format(e, [email])
+
+      connection.query(search, (err, results) => {
+        if (err) throw err
+        if (results.length > 0) {
+          connection.release()
+          throw "User with email already exists"
+        } else {
+          // Insert into users table
+          const i = "INSERT INTO users VALUES (?, ?, ?, ?)"
+          const insert = mysql.format(i, [id, email, hashedPassword, name])
+          connection.query(insert, (err, result) => {
+            connection.release()
+            if (err) throw err
+            console.log("Create a new user: ", result.insertId)
+            res.redirect("/login")
+          })
+        }
+      })
     })
-    res.redirect('/login')
-  } catch {
+
+  } catch (err) {
+    console.log(err)
     res.redirect('/register')
   }
 })
